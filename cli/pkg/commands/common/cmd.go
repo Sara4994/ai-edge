@@ -31,6 +31,7 @@ const (
 	SubCommandSync
 	SubCommandBuild
 	SubCommandAdd
+	SubCommandDescribe
 )
 
 func NewCmd(

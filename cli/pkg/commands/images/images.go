@@ -18,10 +18,12 @@ package images
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/opendatahub-io/ai-edge/cli/pkg/commands/common"
 	. "github.com/opendatahub-io/ai-edge/cli/pkg/commands/common"
 	. "github.com/opendatahub-io/ai-edge/cli/pkg/commands/flags"
 	"github.com/opendatahub-io/ai-edge/cli/pkg/edgeclient"
@@ -30,14 +32,15 @@ import (
 )
 
 type imagesModel struct {
-	args        []string
-	flags       map[string]string
-	pipelineRun edgeclient.PipelineRun
-	edgeClient  *edgeclient.Client
-	modelImages []edgeclient.ModelImage
-	subCommand  SubCommand
-	msg         tea.Msg
-	err         error
+	args          []string
+	flags         map[string]string
+	pipelineRun   edgeclient.PipelineRun
+	edgeClient    *edgeclient.Client
+	modelImages   []edgeclient.ModelImage
+	subCommand    SubCommand
+	msg           tea.Msg
+	err           error
+	selectedImage edgeclient.ModelImage
 }
 
 func NewImagesModel(
@@ -94,6 +97,25 @@ func (m imagesModel) buildModelImage() func() tea.Msg {
 	}
 }
 
+func (m imagesModel) describeModelImage() func() tea.Msg {
+	c := m.edgeClient
+	var modelImage modelImageDescribeMsg
+	return func() tea.Msg {
+		models, err := c.GetModelImages()
+		if err != nil {
+			return common.ErrMsg{err}
+		}
+
+		for _, model := range models {
+			if model.ModelId == m.args[0] && model.Version == m.args[1] {
+				modelImage.selectedImage = model
+			}
+		}
+
+		return modelImageDescribeMsg(modelImage)
+	}
+}
+
 func (m imagesModel) Init() tea.Cmd {
 	switch m.subCommand {
 	case SubCommandList:
@@ -102,6 +124,8 @@ func (m imagesModel) Init() tea.Cmd {
 		return m.syncModelImage()
 	case SubCommandBuild:
 		return m.buildModelImage()
+	case SubCommandDescribe:
+		return m.describeModelImage()
 	}
 	return nil
 }
@@ -120,6 +144,9 @@ func (m imagesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case modelImageBuiltMsg:
 		m.pipelineRun = msg.pipelineRun
+	case modelImageDescribeMsg:
+		m.selectedImage = msg.selectedImage
+
 		return m, tea.Quit
 	}
 	return m, nil
@@ -152,8 +179,52 @@ func (m imagesModel) View() string {
 				),
 			)
 		}
+	case SubCommandDescribe:
+		if _, ok := m.msg.(modelImageDescribeMsg); ok {
+			return m.viewDescribeModelImages()
+		}
+
 	}
 	return ""
+}
+
+func (m imagesModel) viewDescribeModelImages() string {
+
+	var parameters []string
+	var paramItem string
+	for key, value := range m.selectedImage.BuildParams {
+		if key == "target-image-tag-references" {
+			for index, v := range value.([]string) {
+				if index == 0 {
+					paramItem = ParamKeyStyle.Render(fmt.Sprintf("%s:", key)) + fmt.Sprint(v)
+					parameters = append(parameters, paramItem)
+				} else {
+					paramItem = ParamKeyStyle.Render("") + fmt.Sprint(v)
+					parameters = append(parameters, paramItem)
+				}
+			}
+
+		} else {
+			paramItem = ParamKeyStyle.Render(fmt.Sprintf("%s:", key)) + fmt.Sprint(value)
+			parameters = append(parameters, paramItem)
+		}
+
+	}
+
+	renderView := lipgloss.JoinVertical(
+		lipgloss.Left,
+		TitleStyle.Render("Image Details"),
+		KeyStyle.Render("Name:")+m.selectedImage.Name,
+		KeyStyle.Render("Description:")+m.selectedImage.Description,
+		KeyStyle.Render("Version:")+m.selectedImage.Version,
+		KeyStyle.Render("Synced:")+strconv.FormatBool(!m.selectedImage.NeedsSync),
+		TitleStyle.Render("Parameters:")+"",
+	) + fmt.Sprintln("") +
+		lipgloss.JoinVertical(
+			lipgloss.Left,
+			parameters...,
+		)
+	return renderView
 }
 
 func (m imagesModel) viewListModelImages() string {
@@ -226,4 +297,5 @@ func init() {
 	Cmd.PersistentFlags().StringP("namespace", "n", "default", "Description for the flag")
 	Cmd.AddCommand(syncCmd)
 	Cmd.AddCommand(buildCmd)
+	Cmd.AddCommand(describeCmd)
 }
